@@ -49,6 +49,7 @@ type Context struct {
 	Request   *http.Request
 	Writer    ResponseWriter
 
+	// Params 是 []Param 类型，按在路径中的顺序存放
 	Params   Params
 	handlers HandlersChain
 	index    int8
@@ -71,6 +72,8 @@ type Context struct {
 	Accepted []string
 
 	// queryCache caches the query result from c.Request.URL.Query().
+
+	// map[string][]string 的类型别名
 	queryCache url.Values
 
 	// formCache caches c.Request.PostForm, which contains the parsed form data from POST, PATCH,
@@ -165,6 +168,7 @@ func (c *Context) FullPath() string {
 func (c *Context) Next() {
 	c.index++
 	for c.index < int8(len(c.handlers)) {
+		// middleware 中再次 调用 Next() 或者 Abort() 方法编排执行，可以实现递归的调用。
 		c.handlers[c.index](c)
 		c.index++
 	}
@@ -179,6 +183,8 @@ func (c *Context) IsAborted() bool {
 // Let's say you have an authorization middleware that validates that the current request is authorized.
 // If the authorization fails (ex: the password does not match), call Abort to ensure the remaining handlers
 // for this request are not called.
+
+// Abort() 阻止后续中间件的执行，注意调用 abort 的 handlers 仍会执行完毕。
 func (c *Context) Abort() {
 	c.index = abortIndex
 }
@@ -381,6 +387,8 @@ func (c *Context) GetStringMapStringSlice(key string) (smss map[string][]string)
 //         // a GET request to /user/john
 //         id := c.Param("id") // id == "john"
 //     })
+
+// 获取路径参数，如上面的 id 字段
 func (c *Context) Param(key string) string {
 	return c.Params.ByName(key)
 }
@@ -402,6 +410,11 @@ func (c *Context) AddParam(key, value string) {
 // 	   c.Query("name") == "Manu"
 // 	   c.Query("value") == ""
 // 	   c.Query("wtf") == ""
+
+// 从 queryCache 中获取查询字符串参数，url 中 ? 后面的叫查询参数。
+// 调用 c.Request.URL.Query() 即标准库中的方法初始化 Context 的 queryCache 字段。
+// 后续 Query 参数的解析都在 queryCache 字段上进行。
+// queryCache, formCache 通过内存缓存，避免了频繁的函数调用，增加了性能。
 func (c *Context) Query(key string) (value string) {
 	value, _ = c.GetQuery(key)
 	return
@@ -429,6 +442,10 @@ func (c *Context) DefaultQuery(key, defaultValue string) string {
 //     ("Manu", true) == c.GetQuery("name")
 //     ("", false) == c.GetQuery("id")
 //     ("", true) == c.GetQuery("lastname")
+
+// QueryXXX 调用对应的 GetQueryXXX 函数，
+// GetQueryXXX 函数返回 XXX 类型的结果，并附加一个 bool 值，表示是否成功
+// QueryXXX 丢弃了 bool 值。
 func (c *Context) GetQuery(key string) (string, bool) {
 	if values, ok := c.GetQueryArray(key); ok {
 		return values[0], ok
@@ -456,6 +473,7 @@ func (c *Context) initQueryCache() {
 // GetQueryArray returns a slice of strings for a given query key, plus
 // a boolean value whether at least one value exists for the given key.
 func (c *Context) GetQueryArray(key string) (values []string, ok bool) {
+	// 调用 c.Request.URL.Query() 即标准库中的方法初始化 Context 的 queryCache 字段。
 	c.initQueryCache()
 	values, ok = c.queryCache[key]
 	return
@@ -476,6 +494,13 @@ func (c *Context) GetQueryMap(key string) (map[string]string, bool) {
 
 // PostForm returns the specified key from a POST urlencoded form or multipart form
 // when it exists, otherwise it returns an empty string `("")`.
+
+// 获取表单参数。
+// curl -X POST -F 'username=jia' -F 'password=123' http://example.com/login
+// username 和 password 就是表单参数
+
+// 调用标准库的 func (r *Request) ParseMultipartForm(maxMemory int64) error 初始化
+// Context 中的 formCache 字段，之后读取都是从该字段中解析。
 func (c *Context) PostForm(key string) (value string) {
 	value, _ = c.GetPostForm(key)
 	return
@@ -552,8 +577,10 @@ func (c *Context) get(m map[string][]string, key string) (map[string]string, boo
 	exist := false
 	for k, v := range m {
 		if i := strings.IndexByte(k, '['); i >= 1 && k[0:i] == key {
+			// k[i+1:][:j] 语法有点怪，其实就是做了两次切片操作 s := k[i+1:], s = s[:j]
 			if j := strings.IndexByte(k[i+1:], ']'); j >= 1 {
 				exist = true
+				// 取 [] 里的内容作为 dicts 的键
 				dicts[k[i+1:][:j]] = v[0]
 			}
 		}
@@ -562,6 +589,8 @@ func (c *Context) get(m map[string][]string, key string) (map[string]string, boo
 }
 
 // FormFile returns the first file for the provided form key.
+
+// 文件操作，直接封装的标准库函数
 func (c *Context) FormFile(name string) (*multipart.FileHeader, error) {
 	if c.Request.MultipartForm == nil {
 		if err := c.Request.ParseMultipartForm(c.engine.MaxMultipartMemory); err != nil {
@@ -607,6 +636,18 @@ func (c *Context) SaveUploadedFile(file *multipart.FileHeader, dst string) error
 // It parses the request's body as JSON if Content-Type == "application/json" using JSON or XML as a JSON input.
 // It decodes the json payload into the struct specified as a pointer.
 // It writes a 400 error and sets Content-Type header "text/plain" in the response if input is not valid.
+
+// Bind 系列方法实际上就是封装了标准库 encoding 包内的一些方法。
+
+// BindXXX 方法使用 MustBindWith 方法实现
+// ShouldBindXXX 方法使用 ShouldBindWith 方法实现
+// 多一层封装可以实现 api 参数的一致性，只需要传递一个 obj 参数就可以了。
+
+// MustBindWith 与 ShouldBindWith 的区别在于：
+// 				前者绑定失败返回 HTTP 400 错误，并终止请求
+//				后者绑定失败只返回错误内容，但不终止请求
+
+// 读取 Content-Type 的值，根据其值调用相应的 Binding.Bind() 方法。
 func (c *Context) Bind(obj interface{}) error {
 	b := binding.Default(c.Request.Method, c.ContentType())
 	return c.MustBindWith(obj, b)
@@ -784,6 +825,9 @@ func (c *Context) RemoteIP() string {
 }
 
 // ContentType returns the Content-Type header of the request.
+
+// 封装 c.Request.Header.Get(key) 获取 Content-Type 的值
+// filterFlags 截取前面的有效值
 func (c *Context) ContentType() string {
 	return filterFlags(c.requestHeader("Content-Type"))
 }
@@ -820,6 +864,7 @@ func bodyAllowedForStatus(status int) bool {
 }
 
 // Status sets the HTTP response code.
+//
 func (c *Context) Status(code int) {
 	c.Writer.WriteHeader(code)
 }
@@ -882,6 +927,9 @@ func (c *Context) Cookie(name string) (string, error) {
 	return val, nil
 }
 
+// 以下函数通过不同结构的 Render 方法，向 response 写回不同类型的数据。
+// 各个结构的 Render 方法其实也就是调用自定义的 responseWriter 的 Write 方法
+// 最终还是调用标准库中 ResponseWriter 的 Write 方法。
 // Render writes the response headers and calls render.Render to render data.
 func (c *Context) Render(code int, r render.Render) {
 	c.Status(code)
