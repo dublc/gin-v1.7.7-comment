@@ -41,6 +41,14 @@ var defaultTrustedCIDRs = []*net.IPNet{
 }
 
 // HandlerFunc defines the handler used by gin middleware as return value.
+
+// 一般中间件的函数签名为 func(s func) (w func)，即传递进一个 s 函数，返回
+// 中间件包裹后的 w 函数。
+
+// gin 的 middleware 设计比较巧妙，
+// gin 的 middleware 函数签名为 func(*Context)，并没有返回一个包裹后的函数
+// 而是借助 Context.Next(), Context.Abort() 方法，控制 middleware 函数执行
+// 的顺序。
 type HandlerFunc func(*Context)
 
 // HandlersChain defines a HandlerFunc slice.
@@ -155,11 +163,12 @@ type Engine struct {
 	noRoute          HandlersChain
 	noMethod         HandlersChain
 	pool             sync.Pool
-	trees            methodTrees
-	maxParams        uint16
-	maxSections      uint16
-	trustedProxies   []string
-	trustedCIDRs     []*net.IPNet
+	// gin 为每一种方法单独维护一个 tree 提高查找效率。
+	trees          methodTrees
+	maxParams      uint16
+	maxSections    uint16
+	trustedProxies []string
+	trustedCIDRs   []*net.IPNet
 }
 
 var _ IRouter = &Engine{}
@@ -327,10 +336,12 @@ func (engine *Engine) addRoute(method, path string, handlers HandlersChain) {
 	root.addRoute(path, handlers)
 
 	// Update maxParams
+	// 解析 path 根据 ':' 和 '*' 的个数计算目前最大参数个数
 	if paramsCount := countParams(path); paramsCount > engine.maxParams {
 		engine.maxParams = paramsCount
 	}
 
+	// 解析 path 根据 '/' 计算当前最大 section 个数。
 	if sectionsCount := countSections(path); sectionsCount > engine.maxSections {
 		engine.maxSections = sectionsCount
 	}
@@ -559,10 +570,14 @@ func (engine *Engine) RunListener(listener net.Listener) (err error) {
 }
 
 // ServeHTTP conforms to the http.Handler interface.
+
+// 每次处理链接上的请求都会新分配一个 Context。
 func (engine *Engine) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	c := engine.pool.Get().(*Context)
+	// 初始化 Context 的 writermem 字段，该字段的实现包裹了一下 w，增加了 size 和 status 两个字段。
 	c.writermem.reset(w)
 	c.Request = req
+	// 设置了 Context 的其它字段，注意 Writer 和 writermem 字段内部指向的是同一个 responseWriter 变量。
 	c.reset()
 
 	engine.handleHTTPRequest(c)
@@ -597,11 +612,13 @@ func (engine *Engine) handleHTTPRequest(c *Context) {
 	// Find root of the tree for the given HTTP method
 	t := engine.trees
 	for i, tl := 0, len(t); i < tl; i++ {
+		// 定位到方法树，比如 GET 方法树
 		if t[i].method != httpMethod {
 			continue
 		}
 		root := t[i].root
 		// Find route in tree
+		// 使用 nodeValue 结构保存返回数据，其中包括 handlerChain 和 Params 等数据。
 		value := root.getValue(rPath, c.params, c.skippedNodes, unescape)
 		if value.params != nil {
 			c.Params = *value.params
@@ -609,6 +626,7 @@ func (engine *Engine) handleHTTPRequest(c *Context) {
 		if value.handlers != nil {
 			c.handlers = value.handlers
 			c.fullPath = value.fullPath
+			// 使用 Context.Next() 开始编排函数执行。
 			c.Next()
 			c.writermem.WriteHeaderNow()
 			return
