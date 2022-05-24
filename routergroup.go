@@ -60,8 +60,10 @@ type RouterGroup struct {
 var _ IRouter = &RouterGroup{}
 
 // Use adds middleware to the group, see example code in GitHub.
+// 使用 IRoutes 接口是为了便于返回 engine 或者 routergroup 类型。
 func (group *RouterGroup) Use(middleware ...HandlerFunc) IRoutes {
 	group.Handlers = append(group.Handlers, middleware...)
+	// returnObj 根据是否是根 group 决定返回 engine 还是自身这个 group 类型。
 	return group.returnObj()
 }
 
@@ -98,6 +100,8 @@ func (group *RouterGroup) handle(httpMethod, relativePath string, handlers Handl
 // This function is intended for bulk loading and to allow the usage of less
 // frequently used, non-standardized or custom methods (e.g. for internal
 // communication with a proxy).
+
+// 以下的各方法最终调用的都是 engine.addRoute 进行添加路由。
 func (group *RouterGroup) Handle(httpMethod, relativePath string, handlers ...HandlerFunc) IRoutes {
 	if matched := regEnLetter.MatchString(httpMethod); !matched {
 		panic("http method " + httpMethod + " is not valid")
@@ -218,11 +222,14 @@ func (group *RouterGroup) combineHandlers(handlers HandlersChain) HandlersChain 
 	finalSize := len(group.Handlers) + len(handlers)
 	assert1(finalSize < int(abortIndex), "too many handlers")
 	mergedHandlers := make(HandlersChain, finalSize)
+	// 把以前的处理函数放在前面，后面添加的 handlers 放在 HandlersChan 的尾部。
 	copy(mergedHandlers, group.Handlers)
 	copy(mergedHandlers[len(group.Handlers):], handlers)
 	return mergedHandlers
 }
 
+// 注册路由处理函数的时候需要此方法计算拼接后的路径。
+// 对于 Group 过后又 Group 的情况也需要此方法计算拼接后的路径。
 func (group *RouterGroup) calculateAbsolutePath(relativePath string) string {
 	return joinPaths(group.basePath, relativePath)
 }
