@@ -32,6 +32,7 @@ const (
 
 // Error represents a error's specification.
 type Error struct {
+	// 可以用于存放底层错误
 	Err  error
 	Type ErrorType
 	Meta interface{}
@@ -57,6 +58,7 @@ func (msg *Error) SetMeta(data interface{}) *Error {
 func (msg *Error) JSON() interface{} {
 	jsonData := H{}
 	if msg.Meta != nil {
+		// *** reflect 包的使用
 		value := reflect.ValueOf(msg.Meta)
 		switch value.Kind() {
 		case reflect.Struct:
@@ -81,6 +83,9 @@ func (msg *Error) MarshalJSON() ([]byte, error) {
 }
 
 // Error implements the error interface.
+
+// 返回底层的 Error 信息。
+// ? 为什么这里使用值语义了
 func (msg Error) Error() string {
 	return msg.Err.Error()
 }
@@ -97,6 +102,9 @@ func (msg *Error) Unwrap() error {
 
 // ByType returns a readonly copy filtered the byte.
 // ie ByType(gin.ErrorTypePublic) returns a slice of errors with type=ErrorTypePublic.
+
+// 注意 errorMsgs 的方法使用的都是 值类型的 recevier，
+// 因为 errorMsgs 是一个切片，对切片使用值语义。
 func (a errorMsgs) ByType(typ ErrorType) errorMsgs {
 	if len(a) == 0 {
 		return nil
