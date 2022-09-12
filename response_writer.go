@@ -17,6 +17,9 @@ const (
 )
 
 // ResponseWriter ...
+
+// 不直接使用 http.ResponseWriter 而是自定义一个 ResponseWriter 是为了提供更多额外
+// 的功能。
 type ResponseWriter interface {
 	http.ResponseWriter
 	http.Hijacker

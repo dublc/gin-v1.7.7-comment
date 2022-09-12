@@ -117,19 +117,28 @@ type node struct {
 	indices   string
 	wildChild bool
 	nType     nodeType
-	priority  uint32
-	children  []*node // child nodes, at most 1 :param style node at the end of the array
-	handlers  HandlersChain
-	fullPath  string
+	// 增加 priority：1）调用 node.addRoute 方法时，增加当前 node 的 priority
+	//		  2) 有相同前缀根据 path 创建另一个子节点时，当前节点调用 incrementChildPrio
+	//		     方法增加新创建节点的 priority，增加值后为 1。
+	//		  3) 当前节点有通配符字段时，需要分割节点，分割后通配符节点作为子节点，
+	//		     通配符节点 priority 字段增加一，增加后值 1。
+	// 减小 priority：1) 有相同前缀分割节点时，子节点的 priority 为原本节点 priority 值减一
+	priority uint32
+	children []*node // child nodes, at most 1 :param style node at the end of the array
+	handlers HandlersChain
+	fullPath string
 }
 
 // Increments priority of the given child and reorders if necessary
+// 更新 pos 位置的 priority, 并且对 children 切片中的 node 按优先级排序
+// 优先级高的排前面。
 func (n *node) incrementChildPrio(pos int) int {
 	cs := n.children
 	cs[pos].priority++
 	prio := cs[pos].priority
 
 	// Adjust position (move to front)
+	// 冒泡排序把优先级最高的 node 排前面。
 	newPos := pos
 	for ; newPos > 0 && cs[newPos-1].priority < prio; newPos-- {
 		// Swap node positions
@@ -137,6 +146,7 @@ func (n *node) incrementChildPrio(pos int) int {
 	}
 
 	// Build new index char string
+	// 更新当前 node 的 indices。
 	if newPos != pos {
 		n.indices = n.indices[:newPos] + // Unchanged prefix, might be empty
 			n.indices[pos:pos+1] + // The index char we move
@@ -153,6 +163,7 @@ func (n *node) addRoute(path string, handlers HandlersChain) {
 	n.priority++
 
 	// Empty tree
+	// Method tree 第一次添加路由时执行 if 中的逻辑。
 	if len(n.path) == 0 && len(n.children) == 0 {
 		n.insertChild(path, fullPath, handlers)
 		n.nType = root
@@ -166,10 +177,24 @@ walk:
 		// Find the longest common prefix.
 		// This also implies that the common prefix contains no ':' or '*'
 		// since the existing key can't contain those chars.
+
+		// 返回第一个不相同的字符 index
 		i := longestCommonPrefix(path, n.path)
 
 		// Split edge
 		if i < len(n.path) {
+			// 有相同前缀时分割当前节点
+			// 将相同前缀部分后面的部分另外创建一个 child 节点，
+			// child 继承当前节点的 wildChild, indices, children, handlers, fullPath 字段的值，
+			// child priority 字段为当前节点的值减一，
+
+			// 当前节点分割后，自身的以下字段需要做出修改：
+			// children 字段清空，只维护 child 作为其中一个元素，
+			// indices 字段改为相同前缀的后一个字符,
+			// path 字段改为相同前缀，
+			// 清空 handlers 字段
+			// wildChild 字段置为 false
+			// 修改 fullPath 字段为
 			child := node{
 				path:      n.path[i:],
 				wildChild: n.wildChild,
@@ -182,6 +207,8 @@ walk:
 
 			n.children = []*node{&child}
 			// []byte for proper unicode char conversion, see #65
+			// indices 代表相同前缀后面的分割字符，
+			// 例如 /ping, /user, 相同前缀为 '/'，那么 indices 就应该为 "pu"。
 			n.indices = bytesconv.BytesToString([]byte{n.path[i]})
 			n.path = path[:i]
 			n.handlers = nil
@@ -190,6 +217,10 @@ walk:
 		}
 
 		// Make new node a child of this node
+
+		// 当前节点与新的 path 有相同前缀时，
+		// 除了要分割当前的节点，还要对根据新的 path 处理后创建一个节点，
+		// 然后加入当前节点的 children 切片中。
 		if i < len(path) {
 			path = path[i:]
 			c := path[0]
@@ -215,11 +246,14 @@ walk:
 			// Otherwise insert it
 			if c != ':' && c != '*' && n.nType != catchAll {
 				// []byte for proper unicode char conversion, see #65
+				// 更新 当前节点的 indices 字段
 				n.indices += bytesconv.BytesToString([]byte{c})
+				// 根据新的 path 处理后创建一个节点，添加到当前节点的 children 切片中。
 				child := &node{
 					fullPath: fullPath,
 				}
 				n.addChild(child)
+				// 更新新创建节点的 priority 字段，并且对当前节点的 children 切片按 priority 进行重排。
 				n.incrementChildPrio(len(n.indices) - 1)
 				n = child
 			} else if n.wildChild {
@@ -265,6 +299,10 @@ walk:
 
 // Search for a wildcard segment and check the name for invalid characters.
 // Returns -1 as index, if no wildcard was found.
+
+// 以 api/:user/info 为例，
+// wildcard 是 :user，不包括后面的 '/'
+// i 是 ':' 或者 '*' 的 index。
 func findWildcard(path string) (wildcard string, i int, valid bool) {
 	// Find start
 	for start, c := range []byte(path) {
@@ -307,19 +345,25 @@ func (n *node) insertChild(path string, fullPath string, handlers HandlersChain)
 			panic("wildcards must be named with a non-empty name in path '" + fullPath + "'")
 		}
 
+		// path 中有通配字符时，分隔当前节点，
+		// 设置当前节点的 path 字段为 ':' 前的一段，不包括 ':'，
+		// 根据通配符设置一个新节点添加到当前节点的 children 字段。
 		if wildcard[0] == ':' { // param
 			if i > 0 {
 				// Insert prefix before the current wildcard
 				n.path = path[:i]
 				path = path[i:]
 			}
-
+			// 为通配字符创建一个新的通配字符节点，
+			// 新节点的 nType 字段为 param，
+			// 将新的节点添加到当前节点的 children 切片中
 			child := &node{
 				nType:    param,
 				path:     wildcard,
 				fullPath: fullPath,
 			}
 			n.addChild(child)
+			// 表示当前节点有通配符子节点。
 			n.wildChild = true
 			n = child
 			n.priority++
@@ -327,6 +371,7 @@ func (n *node) insertChild(path string, fullPath string, handlers HandlersChain)
 			// if the path doesn't end with the wildcard, then there
 			// will be another non-wildcard subpath starting with '/'
 			if len(wildcard) < len(path) {
+				// path 移除掉通配字符。
 				path = path[len(wildcard):]
 
 				child := &node{
@@ -339,6 +384,7 @@ func (n *node) insertChild(path string, fullPath string, handlers HandlersChain)
 			}
 
 			// Otherwise we're done. Insert the handle in the new leaf
+			// 把 handers 放到叶子节点上。
 			n.handlers = handlers
 			return
 		}
@@ -391,6 +437,7 @@ func (n *node) insertChild(path string, fullPath string, handlers HandlersChain)
 	}
 
 	// If no wildcard was found, simply insert the path and handle
+	// 对应 path 中没有通配符的处理。
 	n.path = path
 	n.handlers = handlers
 	n.fullPath = fullPath

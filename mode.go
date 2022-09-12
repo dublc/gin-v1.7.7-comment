@@ -39,6 +39,8 @@ const (
 var DefaultWriter io.Writer = os.Stdout
 
 // DefaultErrorWriter is the default io.Writer used by Gin to debug errors
+
+// Recovery 默认将信息输出到 os.Stderr。
 var DefaultErrorWriter io.Writer = os.Stderr
 
 var (

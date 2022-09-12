@@ -92,12 +92,15 @@ func CustomRecoveryWithWriter(out io.Writer, handle RecoveryFunc) HandlerFunc {
 				if brokenPipe {
 					// If the connection is dead, we can't write a status to it.
 					c.Error(err.(error)) // nolint: errcheck
+					// 终止后续 HandleFunc 的执行。
 					c.Abort()
 				} else {
 					handle(c, err)
 				}
 			}
 		}()
+
+		// c.Next 中有 panic 时，程序退出阶段可以执行上面 defer 中的逻辑进行捕获处理。
 		c.Next()
 	}
 }

@@ -14,6 +14,7 @@ type Render interface {
 	WriteContentType(w http.ResponseWriter)
 }
 
+// 这种用法是测试后面的结构类型是否满足 Render interface。
 var (
 	_ Render     = JSON{}
 	_ Render     = IndentedJSON{}

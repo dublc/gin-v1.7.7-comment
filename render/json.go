@@ -16,6 +16,7 @@ import (
 
 // JSON contains the given interface object.
 type JSON struct {
+	// 把要编码后返回给客户的原始数据存放在 Data 字段。
 	Data interface{}
 }
 

@@ -63,6 +63,9 @@ type Context struct {
 	mu sync.RWMutex
 
 	// Keys is a key/value pair exclusively for the context of each request.
+	// Keys 保存 k v 对，实现 context value 的功能
+	// Set 添加
+	// Get 获取
 	Keys map[string]interface{}
 
 	// Errors is a list of errors attached to all the handlers/middlewares who used this context.
@@ -169,6 +172,7 @@ func (c *Context) Next() {
 	c.index++
 	for c.index < int8(len(c.handlers)) {
 		// middleware 中再次 调用 Next() 或者 Abort() 方法编排执行，可以实现递归的调用。
+		// 即使 middleware 中没有再次调用 Next 也会把 HandlersChain 中的函数执行完。
 		c.handlers[c.index](c)
 		c.index++
 	}
